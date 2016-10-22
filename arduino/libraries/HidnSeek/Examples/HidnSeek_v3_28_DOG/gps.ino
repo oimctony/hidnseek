@@ -38,7 +38,7 @@ bool gpsInit()
     delay(100);
   }
   if (GPSready) {
-    gpsCmd(PSTR(PMTK_SET_NMEA_OUTPUT));
+    gpsCmd(PSTR(PMTK_SET_NMEA_OUTPUT_RMCGGA));
     gpsCmd(PSTR(PMTK_SET_NMEA_UPDATE_1HZ));   // 1 Hz update rate
   } else digitalWrite(rstPin, LOW);
   return GPSready;
@@ -69,10 +69,7 @@ bool gpsProcess()
     {
       char c = Serial.read();
       // New valid NMEA data available
-      if (gps.encode(c))
-      {
-        newGpsData = true;
-      }
+      if (gps.encode(c)) newGpsData = true;
     }
   }
 
@@ -96,7 +93,7 @@ bool gpsProcess()
   }
   else noSat++;
 
-  //printData(newGpsData); // For debug purpose this use 2Ko of flash program
+  //printData(newGpsData); // For debug purpose
 
   redLEDoff;
   return newSerialData;
@@ -112,9 +109,9 @@ void print_date()
 
 void printData(bool complete) {
   print_date();
-  serialString(PSTR("fix="));
-  Serial.print(fix_age);
   if (complete) {
+    serialString(PSTR("syncSat="));
+    Serial.print(syncSat);
     serialString(PSTR(", lat="));
     Serial.print(p.lat, 7);
     serialString(PSTR(", lon="));
@@ -127,23 +124,28 @@ void printData(bool complete) {
     Serial.print(spd);
     serialString(PSTR(", sat="));
     Serial.print(sat);
+  } else {
+    serialString(PSTR(" noSat="));
+    Serial.print(noSat);
   }
-  if (GPSactive) serialString(PSTR(", GPS "));
   if (forceSport) {
-    serialString(PSTR(", sport="));
-    Serial.print(limitSport);
+    serialString(PSTR(", sport"));
   }
   serialString(PSTR(", bat="));
-  Serial.print(batteryPercent);
-  serialString(PSTR("%, noSat="));
-  Serial.print(noSat);
-  serialString(PSTR(", syncSat="));
-  Serial.println(syncSat);
+  Serial.println(batteryPercent);
+  Serial.flush();
 }
 
 void makePayload() {
+  if (forceSport) {
+    if ( previous_lat == 0 && previous_lon == 0) {
+      previous_lat = p.lat;
+      previous_lon = p.lon;
+    }
+    if (gps.distance_between(p.lat, p.lon, previous_lat, previous_lon) < DOG_DISTANCE) syncSat = 255;
+  }
   uint8_t cap;
-  if (sat > 3) {
+  if (syncSat != 0) {
     if (spd > 120 && alt > 1250) {
       airPlaneSpeed = true;  // Abort GPS message if Airplane detected
       syncSat = 255;
@@ -169,8 +171,8 @@ void makePayload() {
 
 void decodPayload() {
   unsigned int alt_ = p.cpx >> 19;
-  unsigned int cap_ = (p.cpx >> 10) & 3;
   unsigned int spd_ = (p.cpx >> 12) & 127;
+  unsigned int cap_ = (p.cpx >> 10) & 3;
   unsigned int bat_ = (p.cpx >> 3) & 127;
   unsigned int mod_ = p.cpx & 7;
   print_date();

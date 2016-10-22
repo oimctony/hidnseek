@@ -31,14 +31,11 @@ void sendSigFox(byte msgType) {
   PORTD |= (1 << redLEDpin);
   // isReady check removed in the library due to reset of millis during sleep time
   makePayload();
+  if (baromPresent) {
+    bmp180Measure(&Temp, &Press);
+    if (Press > 1000) airPlaneSpeed = false;
+  }
   if (msgType > 0) {
-    if (baromPresent) {
-      bmp180Measure(&Temp, &Press);
-      if (Press > 1000) airPlaneSpeed = false;
-    } else {
-      Temp = 20;
-      Press = 1030;
-    }
     if (msgType == MSG_NO_MOTION) {
       p.lat = Temp;
       p.lon = Press;
@@ -48,7 +45,7 @@ void sendSigFox(byte msgType) {
   }
   decodPayload();
   unsigned long previousMillis = millis();
-  if ( !(msgType > 0 && airPlanePress) && !airPlaneSpeed) {
+  if ( !(msgType > 0 && airPlanePress) && !airPlaneSpeed && syncSat != 255) {
     HidnSeek.send(&p, sizeof(p));
     stepMsg(); // Init the message number per day and time usage counters
     while ((uint16_t) (millis() - previousMillis) < 6000) delay(100);

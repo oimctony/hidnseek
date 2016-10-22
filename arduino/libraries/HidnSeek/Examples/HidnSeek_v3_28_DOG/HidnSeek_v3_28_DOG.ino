@@ -13,7 +13,7 @@
 
   HidnSeek by StephaneD 20150313 Not for commercial use              */
 
-#define FILE "HidnSeek_v3_28"
+#define FILE "HidnSeek v3.28 DOG"
 #include "EEPROM.h"
 #include "LowPower.h"
 #include "HidnSeek.h"
@@ -43,6 +43,27 @@ void serialString (PGM_P s) {
     Serial.print(c);
 }
 
+void pin2_isr()
+{
+  button_pressed = true;
+}
+
+void pin3_isr()
+{
+  button_pressed = true;
+}
+
+void initButton(uint8_t button) {
+  if (button == accINT) {
+    attachInterrupt(1, pin3_isr, FALLING);
+  } else {
+    attachInterrupt(0, pin2_isr, FALLING);
+  }
+  button_pressed = false;
+  button_flag = 0;
+
+}
+
 void initGPIO()
 {
   // Set output to 0 for not used Pads
@@ -57,34 +78,34 @@ void initGPIO()
 void flashRed(int num) {
   while (num > 0) {
     PORTD |= (1 << redLEDpin);
-    delay(50);
+    delay(32);
     PORTD &= ~(1 << redLEDpin);
-    if (--num) delay(50);
+    if (--num) delay(64);
   }
 }
 
 void NoflashRed() {
-  delay(25);
+  delay(32);
   PORTD &= ~(1 << redLEDpin) & ~(forceSport << bluLEDpin);
-  delay(50);
+  delay(64);
   PORTD |= (1 << redLEDpin) | (forceSport << bluLEDpin);
 }
 
 int powerDownLoop(int msgs) {
   if (batterySense()) shutdownSys(); // else digitalWrite(shdPin, HIGH);
-  if (forceSport) {
-    if ((batteryPercent < 25) || (limitSport++ >= SPORT_LIMIT)) {
-      //serialString(PSTR("Sport Limit")); Serial.println();
-      forceSport = 0;
-    }
-  } else gpsStandby();
-
-  if (syncSat < 255) {
-    sendSigFox(msgs); // if not arround previous location send new position
+  if ((batteryPercent < 25)) {
+    forceSport = 0;
   }
+  gpsStandby();
+
+  sendSigFox(msgs); // if not arround house location send new position
 
   accelStatus(); // record the current angle
-  if (msgs == MSG_POSITION && spd > 5 && noSat == 0) detectMotion = MOTION_MIN_NUMBER << 1; else detectMotion = 0;
+  if (msgs == MSG_POSITION && spd > 5 && noSat == 0) {
+    detectMotion = MOTION_MIN_NUMBER << 1;
+  } else {
+    detectMotion = 0;
+  }
 
   // Loop duration 8s. 75x 10mn, 150x 20mn,
   static uint8_t countNoMotion;
@@ -93,6 +114,7 @@ int powerDownLoop(int msgs) {
   uint8_t modeSport = forceSport;
 
   unsigned int waitLoop;
+
   if (msgs == MSG_NO_MOTION) {
     waitLoop = 420 << countNoMotion; // 1h loop
     hour += (1 << countNoMotion);
@@ -110,11 +132,12 @@ int powerDownLoop(int msgs) {
     }
     if (countNoMotion < 3) countNoMotion++;
   } else {
-    // waitLoop = (PERIOD_COUNT >> forceSport) - loopGPS;
-    waitLoop = PERIOD_COUNT - loopGPS;  // 10mn loop: 6mn sleep + 4mn for GPS
+    waitLoop = forceSport ? 410 : PERIOD_COUNT - loopGPS;  // 10mn loop: 6mn sleep + 4mn for GPS
   }
 
   unsigned int i = 0;
+  button_pressed = false;
+  button_flag = 0;
 
   period_t sleepDuration;
   if (msgs != MSG_NO_MOTION && detectMotion == 0 && forceSport == 0) sleepDuration = SLEEP_4S; else sleepDuration = SLEEP_8S;
@@ -122,28 +145,38 @@ int powerDownLoop(int msgs) {
   Serial.flush();
   while (i < waitLoop) {
     LowPower.powerDown(sleepDuration, ADC_OFF, BOD_OFF);
-    PORTD |= (1 << redLEDpin) | (forceSport << bluLEDpin);
-    if (GPSactive) {
-      batterySense();
-      if (batteryPercent < 98 && !forceSport) gpsStandby();
+    if (button_pressed || forceSport) {
+      PORTD |= (1 << bluLEDpin);
+      if (button_pressed) waitLoop = 0;
     }
+    PORTD |= (1 << redLEDpin);
     if (accelStatus()) { // device moved
-      if (GPSactive) NoflashRed(); else delay(50);
+      delay(50);
       detectMotion++;
       if (sleepDuration == SLEEP_4S) {
         sleepDuration = SLEEP_8S;
         i = i >> 1;
       }
-      if (msgs == MSG_NO_MOTION || modeSport != forceSport) waitLoop = 0; // exit immediatly or stay in 5mn loop
+      if  (msgs == MSG_NO_MOTION || modeSport != forceSport) waitLoop = 0; // exit immediatly or stay in 5mn loop
     }
+    if ( (detectMotion >= MOTION_MIN_NUMBER) && (i > DOG_COUNT) && forceSport)  waitLoop = 0; // exit immediatly or stay in 5mn loop
     i++;
     PORTD &= ~(1 << redLEDpin) & ~(1 << bluLEDpin);
   }
-  detectMotion = (detectMotion > MOTION_MIN_NUMBER || forceSport) ? 1 : 0;
-  if (msgs == MSG_NO_MOTION && waitLoop == 0) detectMotion = -1; // This mean a motion after a while
-  if (detectMotion > 0 && !GPSactive) GPSactive = gpsInit();
+  if (detectMotion >= MOTION_MIN_NUMBER || forceSport || button_pressed) {
+    detectMotion = 1;
+  } else if (msgs == MSG_NO_MOTION && i > waitLoop) {
+    // This mean a motion after a while
+    detectMotion = -1;
+  }
+  else {
+    detectMotion = 0;
+  }
+  if (detectMotion > 0) {
+    GPSactive = gpsInit();
+  }
   start = millis();
-  loopGPS = syncSat = noSat = 0;
+  loopGPS = syncSat = noSat = sat = 0;
   alt = spd = 0;
   p.lat = p.lon = 0;
   return detectMotion;
@@ -182,9 +215,13 @@ int main(void)
   if (baromPresent = bmp180.init()) {
     delay(500);
     bmp180Measure(&Temp, &Press);
+    bmp180Print();
     flashRed(3);
+  } else {
+    Temp = 20;
+    Press = 1030;
+    serialString(PSTR("Temp fail\r\n"));
   }
-  bmp180Print();
 
   if (initSigFox()) {
     delay(500);
@@ -203,15 +240,17 @@ int main(void)
   // Change charge current to 250mA Not recommanded if connected to a computer, use with wall adapter only.
   //digitalWrite(chg500mA, HIGH);
 
+  initButton(accINT);
+
   start = millis();
 
   while (1) {
 
     if ((uint16_t) (millis() - start) >= 4000) {
-      blueLEDon;
+      PORTD |= (1 << bluLEDpin);
       delay(100);
       accelStatus();
-      blueLEDoff;
+      PORTD &= ~(1 << bluLEDpin);
       loopGPS++;
       start = millis();
     }
@@ -228,6 +267,14 @@ int main(void)
 
     if ( loopGPS > 30 || noSat > 120) {
       detectMotion = powerDownLoop(MSG_NO_GPS);
+    }
+
+    if (button_pressed && button_flag == 0) {
+      button_pressed = false;
+      alt = spd = 0;
+      p.lat = p.lon = 0;
+      sendSigFox(MSG_OPTION);
+      button_flag = 1;
     }
 
     if (detectMotion == 0) detectMotion = powerDownLoop(MSG_NO_MOTION);

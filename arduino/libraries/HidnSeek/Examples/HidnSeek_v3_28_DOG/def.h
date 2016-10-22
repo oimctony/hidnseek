@@ -14,15 +14,18 @@
   along with HidnSeek.  If not, see <http://www.gnu.org/licenses/>.*/
 
 #define ACCEL_MODE 2        // 2G scale for the accelerometer
+#define ACCEL_SENS 2        // 5° minimum angle change
 #define ACCEL_TRIG 40
 #define ACCEL_FLAT 10
-#define SPORT_LIMIT 48      // 4h limit sport duration
 #define PERIOD_LOOP 10      // number of minutes between messages, must be > 10
-#define MOTION_MIN_NUMBER 2
+#define DOG_LOOP 240        // number of seconds between check position, must be > 600
+#define DOG_DISTANCE 25     // radius in meter for DOG geo-fencing
+#define MOTION_MIN_NUMBER 3 // minimum number of angle changes needed to start GPS fix
 
 // --------------- do not change parameters below this line -------------------
 
 #define PERIOD_COUNT ((PERIOD_LOOP * 15) >> 1)
+#define DOG_COUNT (DOG_LOOP >> 3)
 
 #define BATT_MIN 3570
 #define BATT_MAX 4200
@@ -33,7 +36,7 @@
 #define ADDR_CAL_LOW  32 // byte32-33: battery calibration
 #define ADDR_CAL_HIGH 33
 
-#define PMTK_SET_NMEA_OUTPUT  "$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*" // 28"
+#define PMTK_SET_NMEA_OUTPUT_RMCGGA  "$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*" // 28"
 
 #define PMTK_AWAKE   "$PMTK010,001*" // 2E"
 #define PMTK_STANDBY "$PMTK161,0*"   // 28"
@@ -106,6 +109,9 @@ boolean airPlanePress = false;
 
 uint8_t loopGPS = 0;
 
+volatile uint8_t button_flag = 0;
+volatile boolean button_pressed = false;
+
 uint8_t limitSport = 0;
 uint8_t forceSport = 0;
 
@@ -124,9 +130,12 @@ uint8_t  sat = 0;
 uint8_t  syncSat = 0;
 uint8_t  noSat = 0;
 
+float previous_lat = 0;
+float previous_lon = 0;
+
 // BMP180 measurements
-float    Temp = 0;
-uint16_t Press = 0;
+float    Temp;
+uint16_t Press;
 
 // 12 octets = 96 bits payload
 // lat: 32, lon: 32, alt: 13 , spd: 7, bat: 7, mode: 3, cap: 2
@@ -141,6 +150,12 @@ struct Payload {
 Payload p;
 
 /* Hardware and Software Changes Log
+
+  2016-06-01
+  - Fix algorithm for flight mode automatic detection
+  
+  2016-03-23
+  - Interrupt feature linked to external pushbutton
 
   2016-03-20
   - Remove unused variables
